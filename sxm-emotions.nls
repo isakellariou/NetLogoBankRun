@@ -1,0 +1,275 @@
+;;; SXM Emotions 
+;;; Version 1, 2016, Ilias Sakellariou
+;;; Version 1.1, 2017 Ilias Sakellariou
+;;; Version 1.2, 2019 Ilias Sakellariou
+;;; Version 1.2.1 2020 Ilias Sakellariou - Added checks to setting values.
+;;; Emotion functions and implementation
+
+;;; Update Emotions
+;;; Internal Function to update emotions according to the SXM Model
+;;; It is called from the execute-exsm-machine
+;;;    A. Runs the emotion-function
+;;;    B. Updates emotions according to mood.
+;;;    C. Updates emotions according to the contagion vector.
+
+to update-emotions#xsm
+  ;; Run the emotion function provided by the user
+  run get#sm "emotion-function"
+  ;; Emotion correction due to mood and personality trait
+  update-emotion-to-mood#sxm
+  x-update-contagion-percept x-percept-value "contagion-vector"
+  ;;contagion-percept#xsm
+end 
+  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;; Emotions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Initialise emotion structure.
+;;; Emotion Structure contains a set of traits:
+;;; - current emotion vector, which is given in [valence, arousal] coordinates, inside a circle of radius 1.
+;;; - mood 
+;;; - personality-trait
+;;; - emotion function: The emotion function is common to all members of a breed
+;;;   and is formed by "emotion-function-of-<breed>. Should use the x-update-emotion-percept
+;;;   to update emotions according to percepts.
+;;; - expressiveness
+;;; - openness 
+;;; All the above are added to the "state" table, that is initialised for the state machine (for simplicity).
+
+;;; Initialise the table holding the emotion structure. This is internally called by the state machine, however, IF
+;;; the sxm-emotions.nls is used independently it should be done in the initialisation.
+to init-x-emotions 
+   set#sm "emotion-vector" em#xsm 0 0
+   set#sm "mood" em#xsm 0 0
+   set#sm "personality-trait" 0
+   set#sm "emotion-function" taskify#sm (word "emotion-function-of-" breed)
+   set#sm "expressiveness" 1.0 
+   set#sm "openness" 1.0 
+   ;; default value for contagion model
+   set#sm "contagion-model" "none"
+   ;;; default value for influence distance
+   set#sm "infl-distance" 1 
+   set#sm "influence-crowd-function" taskify#sm (word "influence-crowd-of-" breed)
+end
+;;; Reporting the emotions of the agent.
+;;; Reports the emotion Vector of the agent.
+to-report emotion
+  report get#sm "emotion-vector"
+end
+
+;;; Reports the emotion Mood of the agent.
+to-report mood#xsm
+  report get#sm "mood"
+end
+
+;;; Reports the emotion personality trait of the agent.
+to-report ptrait#xsm
+  report get#sm "personality-trait"
+end
+
+to-report contagion-model#xsm
+  report get#sm "contagion-model"
+end
+
+to-report influence-distance#xsm
+   ;;report get#sm "influence-distance"
+   report get#sm "infl-distance"
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Setting the emotion structure parts
+;;; All operations MUST be performed AFTER the init-x-emotions
+;; Sets the emotion vector
+to x-em-set [em-vec#xsm]
+   set#sm "emotion-vector" em-vec#xsm 
+end
+;; Sets the emotion Mood
+to x-mood-set [em-vec#xsm]
+   set#sm "mood" em-vec#xsm 
+end
+;; Sets the personality trait
+to x-ptrait-set [ptr#xsm]
+  ifelse (ptr#xsm < 0 or ptr#xsm > 1) 
+    [error (word "Turtle:" who " value of Presonality Trait Outside Limits: " ptr#xsm)]
+    [set#sm "personality-trait" ptr#xsm]
+end
+;; Sets the expressiveness
+to x-expr-set [expr#xsm]
+  ifelse (expr#xsm < 0 or expr#xsm > 1) 
+    [error (word "Turtle:" who " value of Expressiveness Outside Limits: " expr#xsm)]
+    [set#sm "expressiveness" expr#xsm]
+end
+;; Sets the Openness
+to x-open-set [open#xsm]
+  ifelse (open#xsm < 0 or open#xsm > 1) 
+   [error (word "Turtle:" who " value of Openness Outside Limits: " open#xsm)]
+   [set#sm "openness" open#xsm]
+end
+;; Setting the contagion model
+;; This can be either "none", "simple", "ascribe-like"
+to x-contagion-set [cont#xsm]
+  set#sm "contagion-model" cont#xsm 
+end
+
+to x-influence-distance-set [dis#xsm]
+  set#sm "infl-distance" dis#xsm 
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Define a new emotion on arousal + valence
+;;; Necessary checks so that the emotion vector does not lie outside the circle.
+;;; Does not do any transformations, it simply checks whether the emotion is a valid one.
+to-report x-em [valence#xsm arousal#xsm]
+  report em#xsm valence#xsm arousal#xsm
+  ;ifelse (sqrt (valence#xsm ^ 2 + arousal#xsm ^ 2) > 1)
+  ;  [error (word "Valence: " valence#xsm "Arousal: " arousal#xsm " emotion Vector length More than one.")]
+  ;  [report (list valence#xsm arousal#xsm)]
+end
+
+;;; Define a new emotion on magnitude + theta
+to-report x-emotion-mt [magnitude#sxm theta#sxm] 
+  report em#xsm (magnitude#sxm * cos(theta#sxm)) (magnitude#sxm * sin(theta#sxm))
+end
+
+;;; Emotion operations
+;;; Reports the emotion that lies opposite to the emotion vector provided.
+to-report x-em-opposite [em-vec#xsm]
+  report em#xsm ( - em-valence#xsm em-vec#xsm) ( - em-arousal#xsm em-vec#xsm)
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Creating an emotion vector
+;;; Internal function checking that the emotion is valid.
+to-report em#xsm [valence#xsm arousal#xsm]
+  ;;ifelse (sqrt (valence#xsm ^ 2 + arousal#xsm ^ 2) > 1)
+  ifelse not (valence#xsm <= 1 and arousal#xsm <= 1)
+    [error (word "Turtle:" who " VALENCE: " valence#xsm " AROUSAL: " arousal#xsm ". Emotion Vector length More than ONE: " sqrt (valence#xsm ^ 2 + arousal#xsm ^ 2) "." )]
+    [report (list valence#xsm arousal#xsm)]
+end
+
+;;; Accessing Emotion Valence of an emotion vector
+to-report em-valence#xsm [em-vec#xsm]
+  report (first em-vec#xsm)
+end
+
+;;; Accessing Emotion Arousal
+to-report em-arousal#xsm [em-vec#xsm]
+  report (item 1 em-vec#xsm)
+end
+
+;;; Simplified version to report valence of self 
+to-report x-valence-of-self 
+  report em-valence#xsm emotion
+end
+
+;;; Simplified version to report arousal of self 
+to-report x-arousal-of-self 
+  report em-arousal#xsm emotion
+end
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Mood Effects
+;;; Emotion vector Update with Mood
+to update-emotion-to-mood#sxm
+   let deltaA (em-arousal#xsm mood#xsm - em-arousal#xsm emotion) 
+   let deltaV (em-valence#xsm mood#xsm - em-valence#xsm emotion)
+   x-em-set em#xsm
+      (em-valence#xsm emotion + deltaV * 0.1 * ptrait#xsm ^ 3 * (1 / (1 + e ^  ( - ptrait#xsm * (-1 + abs deltaV))))  )
+      (em-arousal#xsm emotion + deltaA * 0.1 * ptrait#xsm ^ 3 * (1 / (1 + e ^  ( - ptrait#xsm * (-1 + abs deltaA)))) )
+end
+
+;;; Consider the percepts coming from environment x-update-emotion-percept
+;;; Percepts MUST be a vector (to ensure correctness).
+to  x-update-emotion-percept [percept#xsm]
+   let deltaA (em-arousal#xsm percept#xsm - em-arousal#xsm emotion) 
+   let deltaV (em-valence#xsm percept#xsm - em-valence#xsm emotion)
+   x-em-set em#xsm
+      (em-valence#xsm emotion + deltaV * ptrait#xsm ^ 2 * (1 / (1 + e ^ ( - ptrait#xsm * (-1 + abs deltaV))))  )
+      (em-arousal#xsm emotion + deltaA * ptrait#xsm ^ 2 * (1 / (1 + e ^ ( - ptrait#xsm * (-1 + abs deltaA)))) )
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Random Emotion Creation
+;;; Used to set initial values in experiements.
+;;; Reports a random emotion that is not zero. 
+to-report random-emotion
+  let mag (10 + (random 90)) / 100
+  let theta random 360
+  report em#xsm (mag * cos(theta)) (mag * sin(theta))  
+end
+
+;;; report an emotion of magnitude mag and a direction from min to max theta.
+to-report random-emotion-mt [magnitude#sxm min#sxm max#sxm]
+  let theta#sxm min#sxm + random (max#sxm - min#sxm)
+  report em#xsm (magnitude#sxm * cos(theta#sxm)) (magnitude#sxm * sin(theta#sxm))  
+end
+
+;;; Reports the magnitude of the emotion vector.
+to-report mag#sxm [val#xsm ar#xsm]
+  report sqrt(val#xsm ^ 2 + ar#xsm ^ 2)
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Contagion Models 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Channel strength in ASCRIBE
+;;; This is executed by the agents in the influence crowd.
+to-report channel-strength#xsm
+  report  (1 - ((distance myself) / influence-distance#xsm))
+          ;1 / ((1 + distance myself) ^ 2)
+end
+
+
+
+;;; Reports the contagion vector according to different models.
+;;; Attention IF NONE is near then report your emotion. 
+to-report contagion-percept#xsm
+  if contagion-model#xsm = "none" [report emotion]
+  let influence-crowd-local runresult  get#sm "influence-crowd-function"
+  if count influence-crowd-local = 0 [report emotion] 
+  let wi-local wi#xsm influence-crowd-local
+  ;;; Avoid dision by zero.
+  if wi-local = 0 [report emotion] 
+  
+  if (contagion-model#xsm = "simple") 
+     [report em#xsm 
+      (mean [x-valence-of-self] of influence-crowd-local)
+      (mean [x-arousal-of-self] of influence-crowd-local)]
+  if (contagion-model#xsm = "ascribe-like")   
+     [report em#xsm 
+      (sum [x-valence-of-self * ((get#sm "expressiveness" * channel-strength#xsm) / wi-local)] of influence-crowd-local)
+      (sum [x-arousal-of-self * ((get#sm "expressiveness" * channel-strength#xsm) / wi-local)] of influence-crowd-local)]
+end
+
+;;; Reports the sum of the expressiveness * channel strength of the influence crowd.
+to-report wi#xsm [influence-crowd-local]
+  report sum [get#sm "expressiveness" * channel-strength#xsm] of influence-crowd-local
+end
+
+;;; Reports the sum of the expressiveness * channel strength of the influence crowd, but also considers the openness of the receiver agent.
+to-report si#xsm [influence-crowd-local]
+  report sum [get#sm "expressiveness" * channel-strength#xsm * [get#sm "openness"] of myself] of influence-crowd-local
+end
+
+;;; UpdateAccording to Contagion
+to  x-update-contagion-percept [percept#xsm]
+   let deltaA (em-arousal#xsm percept#xsm - em-arousal#xsm emotion) 
+   let deltaV (em-valence#xsm percept#xsm - em-valence#xsm emotion)
+   let factor#xsm get#sm "openness" 
+   x-em-set em#xsm
+      (em-valence#xsm emotion + deltaV * factor#xsm ^ 2 * (1 / (1 + e ^ ( - factor#xsm * (-1 + abs deltaV))))  )
+      (em-arousal#xsm emotion + deltaA * factor#xsm ^ 2 * (1 / (1 + e ^ ( - factor#xsm * (-1 + abs deltaA)))) )
+end
+
+;;; Add contagion percept according to the selected contagion model
+to x-add-contagion-percept-std 
+  x-add-percept-value "contagion-vector" contagion-percept#xsm
+end
+
+;;; Add custom percept
+to x-add-contagion-percept [c-emotion#xsm]
+  x-add-percept-value "contagion-vector" c-emotion#xsm
+end
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Auxiliary (For debugging)
+to show-emotions#xsm 
+  show (word "emotion:" emotion " mood:" mood#xsm " pt:" ptrait#xsm " open:"  get#sm "openness"  " expr:" get#sm "expressiveness")
+end  

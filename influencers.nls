@@ -1,0 +1,39 @@
+breed [journalists journalist]
+breed [goverment_members goverment_member]
+
+;;; jounralists with the aim to spread panic.
+;;; Influencers are journalists. 
+to setup-journalists
+  create-journalists Number-of-influencers [
+    set size 1
+    set shape "dot"
+    set color yellow
+    rand-xy-co
+  ]
+end
+
+;;; Not active in this simulation.
+;;; Goverment officials are supposed to have the opposite affect
+;;; of influencers (journalists).
+to setup-goverment_members
+    create-goverment_members 3 [
+    set size 1.5
+    set shape "dot"
+    set color blue
+    rand-xy-co
+  ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Agent Actions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+to influencers-move-randomly
+  set heading heading + (round random-normal 0 10)
+  influencers-walk
+end
+
+to influencers-walk
+  if ((any? other journalists in-cone 1 180) or (any? other goverment_members in-cone 1 180))
+    [set heading heading + random 90]
+  fd 0.2
+end

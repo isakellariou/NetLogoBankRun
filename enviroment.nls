@@ -1,0 +1,277 @@
+;;; Environment Setup File.
+;;; Setup and Behaviour Specification for entities in the environment.
+;;; Breeds have names that are self explanatory.
+
+breed [atms atm]
+breed [banks bank]
+breed [companies company]
+breed [houses house]
+breed [shops shop]
+
+atms-own [
+  cashAmount
+  cashLevel
+  myBank 
+]
+
+shops-own [
+  amount_asked
+  profits
+  myBank 
+  shop-open
+]
+
+banks-own [
+  id
+  bankReserves
+  bankDeposits
+  tickets-awarded
+  tickets-served
+  serving
+  status-solvent
+  banksAtms
+  numAtms
+  can-serve
+  has-queue?
+]
+
+to setup-atms
+  create-atms Number-of-ATMs [
+    set size 1
+    set shape "computer server"
+    set color brown
+    rand-xy-co
+    set cashAmount 0
+    set cashLevel 0
+    set myBank one-of banks
+  ]
+end
+
+to setup-shops
+  create-shops Number-of-Markets [
+    set size 1
+    set shape "building store2"
+    set color orange
+    rand-xy-co
+    set shop-open true
+    set profits table:make
+    foreach [who] of banks [[wb] -> table:put profits wb 0]
+    set mybank one-of banks
+  ]
+end
+
+to setup-banks
+  create-banks Number-of-Banks [
+    set size 1.5
+    set shape "bank"
+    set color gray
+    rand-xy-co
+    set status-solvent true
+    ;;; bank reserves and deposits are computed from agent money
+    ;;;set bankReserves (random Initial-Bank-Savings)
+    ;; set label (word bankReserves)
+    set tickets-awarded 0
+    set tickets-served 0
+    set serving [0]
+    set has-queue? false
+  ]
+end
+
+to setup-companies
+  create-companies Number-of-Companies [
+    set size 1
+    set shape "company"
+    set color magenta
+    rand-xy-co
+  ]
+end
+
+to setup-houses
+  create-houses Population [
+    set size 0.5
+    set shape "house2"
+    set color green
+    rand-xy-co
+  ]
+end
+
+
+;;;
+to update-bank-atm-reserves
+  ask banks [
+    set banksAtms atms with [myBank = myself]
+    set numAtms count banksAtms
+    set bankReserves round (bankDeposits * 0.10)
+    set can-serve 5 + 2 * numAtms  
+    ;; distribute-cash-to-atms
+    ;; show myAtms 
+    ;; update-bank-label
+  ]
+end
+
+;;; Distribute Cash to the ATMS.
+;;; (Future Use)
+to distribute-cash-to-atms
+    ;let myAtms atms with [myBank = myself]
+    ;let numAtms count myAtms
+    if numAtms > 0 [
+      let distribution floor (0.4 * bankReserves)
+      ask banksAtms [
+         set cashAmount floor (distribution / numAtms)
+         set cashLevel cashAmount
+         update-atm-label]
+      set BankReserves BankReserves - distribution  
+    ] 
+end
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; CODE Related to BANKS
+to bank-behaviour
+  ;; Update at all cycles
+  ifelse (count persons in-radius 1.3 > 2 * can-serve)
+    [set has-queue? true]
+    [set has-queue? false]
+  if tickets-served = tickets-awarded [stop]
+  let upper-ticket (min (list (tickets-served + can-serve) tickets-awarded))
+  set serving (range (tickets-served + 1) (upper-ticket + 1))
+  set tickets-served (last serving)
+end
+
+;;; Awards a ticket to a customer
+;;; Tickets are provided when waiting in queue.
+to-report provide-ticket
+  set tickets-awarded tickets-awarded + 1
+  report tickets-awarded
+end
+
+;;; Simple Action that drops a deposit to a bank.
+;;; This is used initially by the agents to drop deposits to 
+;;; their bank. 
+to accept-savings-deposit [amount]
+  change-bank-deposits amount
+end
+
+;;; Daily deposit used to update both cash
+;;; and reserves.
+to accept-daily-deposit [amount]
+  change-bank-deposits amount
+  change-bank-reserves amount
+end
+
+;;; Simple Action to withdraw cash from bank
+;;; If the bank does not have enough reserves then is fails.
+to withdraw-money [amount]
+   ifelse status-solvent and solvent_for? amount
+      [change-bank-deposits (- amount)
+       change-bank-reserves (- amount) 
+
+      ]
+  [   if (status-solvent) [output-show ticks ]
+      set status-solvent false
+      set color red
+     ]
+end
+
+;;; Can the bank pay the amount?
+to-report solvent_for? [amount]
+  report bankReserves > amount
+end
+
+;;; Actions to change bank deposits
+;;; Internally Used.
+to change-bank-deposits [amount]
+  set bankDeposits bankDeposits + amount
+end
+
+;;; Actions to change bank reserves 
+to change-bank-reserves [amount]
+  set bankReserves bankreserves + amount
+end
+
+;;; Updating Bank Labels
+to update-bank-label
+  set label (word (round bankReserves) "/" (round bankDeposits))  
+end
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; ATM Behaviour
+;;;; Occurs Once Daily
+to atm-behaviour
+   ;; Each ATM is related to one Bank
+   if (cashAmount < cashLevel) and ([bankReserves] of myBank > cashLevel ) ;;; banks with [myBank = [id] of banks] > Initial-Atm-amount  )
+      [
+        let d (cashLevel - cashAmount)
+        ask MyBank [change-bank-deposits (- d)]
+        set cashAmount cashAmount + d
+      ]
+end
+
+
+to-report atm-withdraw [amount]
+  ifelse cashAmount > amount
+      [ set cashAmount cashAmount - amount
+        ask MyBank [change-bank-deposits amount] 
+       report true]
+     [report false]
+end
+
+;;; Updating ATM label (presentation purposes only).
+to update-atm-label
+  set label cashAmount
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Shops/Market Actions 
+;;; Updating Shop label (presentation purposes only).
+to update-shop-label
+  set label map [[p]-> table:get profits p] table:keys profits 
+end
+
+;;; Receive Payment 
+to receive-payment [amount-money from-bank]
+  table:put profits from-bank (table:get profits from-bank + amount-money)
+end
+
+;;; 
+to shop-behaviour
+  if ([status-solvent] of myBank) 
+  [ 
+    foreach table:keys profits [[wb]-> ask bank wb [accept-daily-deposit [table:get profits wb] of myself]]
+    foreach table:keys profits [[wb]-> table:put profits wb 0]
+  ]
+end 
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Reporting
+;;; Reporters below are used to plots. 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+to-report total-bank-reserves
+  report sum [bankReserves] of banks 
+end
+
+to-report total-bank-deposits
+  report sum [bankDeposits] of banks 
+end
+
+to-report total-atm-cash
+  report sum [cashAmount] of atms 
+end
+
+to-report total-wallet-cash
+  report sum [x-mem-value "Wallet"] of persons 
+end
+
+to-report total-person-savings
+  report sum [x-mem-value "Savings"] of persons 
+end
+
+
+to-report mean-cash-desired
+  report mean [x-mem-value "CashDesired"] of persons
+end

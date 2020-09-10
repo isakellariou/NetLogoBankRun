@@ -1,0 +1,383 @@
+breed [persons person]
+
+persons-own [
+  ;;; Varables needed for the eXMachines
+  states
+  memory
+  percept
+]
+
+to setup-persons
+  create-persons Population [
+     set size 1
+     set shape "dot"
+     set color white
+     ;;move-to one-of houses
+     rand-xy-co
+
+     ;;X-Machines variables
+     ;; Find one home that is vacant.
+     let myhome one-of houses with [not any? other persons-on self]
+     move-to myhome
+
+     initialise-ex-machine
+     ;; That's my Home
+     x-mem-initial-var "Home" myhome
+     ;; This is where I work
+     x-mem-initial-var "WorkPlace" one-of companies
+     x-mem-initial-var "Target" myhome
+     x-mem-initial-var "Distance to Target" 0
+
+     ;; All values that concern the person are X-memory values
+     let initial-amount Average-Salary + random 200
+     x-mem-initial-var "Salary" initial-amount
+     ;;; So initially I consider that I have 10% of my salary in cash
+     ;;; Wallet is the cash in my pocket.
+     x-mem-initial-var "Wallet" round (initial-amount / 10)
+     ;;; Initialy cash desired and Wallet are the same
+     ;;; The following will be changed during the experiment to reflect 
+     ;;; the agents' panic
+     x-mem-initial-var "CashDesired" x-mem-value "Wallet"
+     x-mem-initial-var "OrigCashLevel" x-mem-value "CashDesired"
+     x-mem-initial-var "Wallet/Cash" 0.3 
+     let mysavings 3 * initial-amount + random 300 - x-mem-value "Wallet" ;; initial savings for all agents, to the bank  
+     x-mem-initial-var "CashtoWithdraw" 0
+     x-mem-initial-var "Savings" mysavings
+     x-mem-initial-var "MyBank" one-of banks
+     x-mem-initial-var "MyBankNumber" ([who] of x-mem-value "MyBank")
+     ask (x-mem-value "MyBank") [accept-savings-deposit mysavings]
+     ;; could be simpler.
+     x-mem-initial-var "MyBankAndAtms" (turtle-set x-mem-value "MyBank" atms with [MyBank = [x-mem-value "MyBank"] of myself])
+     x-mem-initial-var "Goods-Level" 100
+     x-mem-initial-var "MyTicket" "NoTicket"
+
+     x-clear-percepts
+     let init-em random-emotion-mt 1 -10 10;; (0.1 + random 90 / 100 ) 0 5
+      ;; mood and emotion alligned
+     x-em-set init-em
+     ; mood is the same as the initial emotion
+     x-mood-set init-em
+     
+     ; Setting Expressiveness
+     ;; Need to ensure that it is always in 0..1
+     x-expr-set init-exp + random-float 0.2 ;; ( 1 - init-exp);;random-normal 0.15 0.05
+     ; Setting Openness
+     ;; Need to ensure that it is always in 0..1
+     x-open-set init-open + random-float 0.2 ;;(1 - init-open) ;random-normal 0.15 0.05
+    
+     x-ptrait-set p-trait-min + random-float(1 - p-trait-max)
+     ;;; Setting the preferred contagion model
+     x-contagion-set contagion-model
+     x-influence-distance-set influence-distance
+  ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; XMachine State Diagram
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; The X-Machine model as stated in the paper.
+to-report state-def-of-persons
+ report x-diagram
+  state "resting"
+   # x-func "is-time-to-go-to-work" goto "travelling-to-work"
+   # x-func "needing-cash" goto "travelling-to-bank"
+   # x-func "needing-goods" goto "travelling-to-market"
+   # otherwise do "nothing" goto "resting"
+  end-state
+
+  state "travelling-to-work"
+   # x-func "commuting" goto "travelling-to-work"
+   # otherwise do "nothing" goto "working"
+  end-state
+
+  state "working"
+  # x-func "finished-work" goto "travelling-to-house"
+  # otherwise do "nothing" goto "working"
+  end-state
+
+  state "travelling-to-house"
+   # x-func "commuting" goto "travelling-to-house"
+   # otherwise do "nothing" goto "resting"
+  end-state
+
+  state "travelling-to-market"
+   # x-func "commuting" goto "travelling-to-market"
+   # otherwise do "nothing" goto "shopping"
+  end-state
+
+  state "shopping"
+  # x-func "finished-shopping" goto "travelling-to-house"
+  # x-func "buying-goods" goto "shopping"
+  # x-func "needing-cash" goto "travelling-to-bank"
+  # x-func "zero-savings" goto "travelling-to-house"
+  # otherwise do "nothing" goto "shopping"
+  end-state
+
+  state "travelling-to-bank"
+   # x-func "commuting" goto "travelling-to-bank"
+   # otherwise do "nothing" goto "interacting-with-bank"
+  end-state
+
+  state "interacting-with-bank"
+  # x-func "pick-ticket" goto "interacting-with-bank"
+  # x-func "detecting-bank-failure" goto "travelling-to-house"
+  # x-func "withdrawing-money" goto "travelling-to-house"
+  # otherwise do "nothing" goto "interacting-with-bank"
+  end-state
+
+ end-diagram
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Emotions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Emotion Function updates emotions based on percepts.
+;;; This function actually updates the emotion percept based on the percepts the agent received in the cycle.
+;;; It is run AFTER the agent has decided on an action in the previous cycle.
+
+to emotion-function-of-persons
+  ;;; Changes to the emotion functions are to be found here
+  let journs (count journalists in-radius (influence-distance))
+  if (journs > 0 )[repeat journs [x-update-emotion-percept [-0.5 0.7] ]]
+  if (x-has-percept? "my-bank-failed") [x-update-emotion-percept [-1 1]] 
+  if (any? banks with [has-queue?] in-radius influence-distance and journs > 0)
+    [x-update-emotion-percept [-0.5 0.8]]
+  ;;; Adds contagion percept according to the standard model
+  ;;; Contagion is part of the percepts, therefore is here.
+  x-add-contagion-percept-std
+
+  if x-arousal-of-self <= 0 [set-x-memory-value "CashDesired" (x-mem-value "OrigCashLevel")]
+  if x-arousal-of-self > 0 [set-x-memory-value "CashDesired" (1 + 5 * x-arousal-of-self) * (x-mem-value "OrigCashLevel")]
+  set-x-memory-value "Wallet/Cash" (-0.25 * x-valence-of-self + 0.75)
+
+end
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Update percepts function.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to update-percepts-persons
+    x-clear-percepts
+  
+   ;;; Adds rest of percepts
+   if is-start-of-the-day? [x-add-percept "day-starts"]
+   if work-day-ends? or free-time? [x-add-percept "work-day-ends"]
+  
+   if (working-period?) [x-add-percept "working-time"]
+  
+   ;; Have I arrived to my target?
+   if distance x-mem-value "Target" < 0.5 [x-add-percept "at-target-location"]
+   if x-mem-value "Goods-Level" < 5 [x-add-percept "goods-in-shortage"]
+   if x-mem-value "Goods-Level" > 99 [x-add-percept "enough-goods"]
+   if [not status-solvent] of (x-mem-value "MyBank" ) [x-add-percept "my-bank-failed"]
+   
+   if member? x-mem-value "MyTicket" [serving] of x-mem-value "MyBank"
+      [x-add-percept "withdraw-now"]
+     
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Influence crowd function needed to be defined for each breed
+;;; Make sure that you set the same distance as in the influence-distance parameter set above.
+;;; and that all your agents DO have emotions enabled.
+to-report influence-crowd-of-persons
+  report other persons in-radius influence-distance
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; X-Functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report is-time-to-go-to-work
+    ifelse (x-has-percept? "working-time")
+     [report x-true #< >#  #<
+       x-mem-set "Target" x-mem-value "WorkPlace"
+       x-mem-set "Distance to Target" (distance x-mem-value "WorkPlace") ># ]
+     [report x-false]
+end
+
+;; Communitung Function that allows the agent to travel to a target location.
+;; Easy to do with X-machines and memory.
+to-report commuting
+  ifelse (not x-has-percept? "at-target-location")
+  [report x-true #< x-action [[]-> move-to-target x-mem-value "Target" ]># #< >#]
+  [report x-false]
+end
+
+to-report finished-work
+  ifelse (x-has-percept? "work-day-ends")
+     [report x-true #< >#
+        #< x-mem-set "Target" x-mem-value "Home"
+           x-mem-set "Distance to Target" (distance x-mem-value "Home") ># ]
+     [report x-false]
+end
+
+;;; If I need Goods and I have the money, then I move to the Shop. 
+to-report needing-goods
+    let targ-shop one-of shops
+    ifelse (x-has-percept? "goods-in-shortage" and x-mem-value "Wallet" >  1)
+     [report x-true #< >#
+        #< x-mem-set "Target" targ-shop
+           x-mem-set "Distance to Target" (distance targ-shop) ># ]
+     [report x-false]
+end
+
+to-report finished-shopping
+    ifelse (x-has-percept? "enough-goods")
+     [report x-true #< >#
+        #< x-mem-set "Target" x-mem-value "Home"
+           x-mem-set "Distance to Target" (distance x-mem-value "Home") ># ]
+     [report x-false]
+
+end
+
+to-report zero-savings
+    ifelse (x-mem-value "Savings" = 0)
+     [report x-true #< 
+         x-action [[]-> set color 5 ] >#
+        #< x-mem-set "Target" x-mem-value "Home"
+           x-mem-set "Distance to Target" (distance x-mem-value "Home") ># ]
+     [report x-false]
+end
+
+
+to-report buying-goods
+   ifelse (x-mem-value "Wallet" >=  1)
+    [report x-true #< x-action [[]-> ask x-mem-value "Target" [receive-payment 1 [x-mem-value "MyBankNumber"] of myself]] >#
+        #< x-mem-set "Wallet" (x-mem-value "Wallet" - 1 )
+           x-mem-set "Goods-Level" (x-mem-value "Goods-Level" + 10) ># ]
+     [report x-false]
+end
+
+
+to-report needing-cash
+  let targ min-one-of (x-mem-value "MyBankAndAtms") [distance myself] 
+  ifelse (x-mem-value "Wallet" <=  (x-mem-value "Wallet/Cash" * x-mem-value "CashDesired") and x-mem-value "Savings" > 0 and not x-has-percept? "my-bank-failed")
+      [report x-true #< >#
+        #< x-mem-set "Target" targ ;; x-mem-value "MyBank"
+           x-mem-set "Distance to Target" (distance targ)
+           x-mem-set "CashtoWithdraw" min (list (x-mem-value "CashDesired" - x-mem-value "Wallet") x-mem-value "Savings") ># ]
+     [report x-false]
+end
+
+;;; Pickup a ticket to wait in the bank.
+to-report pick-ticket
+  ifelse (x-mem-value "MyTicket" = "NoTicket" )
+  [report x-true 
+    #<   >#
+    #< x-mem-set "MyTicket"  [provide-ticket] of x-mem-value "MyBank" ># ]
+  [report x-false]
+end
+
+
+;;; X-Action to withdraw Money
+to-report withdrawing-money
+  ;;; Withdraw as much as needed OR as much as I have.,
+  let cash#2#withdraw x-mem-value "CashtoWithdraw"
+  ifelse(x-has-percept? "withdraw-now" and [solvent_for? cash#2#withdraw] of (x-mem-value "MyBank"))
+  [
+    report x-true 
+    #< x-action [[] -> ask (x-mem-value "MyBank") [withdraw-money cash#2#withdraw]] 
+    ># 
+    #< x-mem-set "Wallet" (x-mem-value "Wallet" + x-mem-value "CashtoWithdraw")
+       x-mem-set "Savings" (x-mem-value "Savings" - x-mem-value "CashtoWithdraw")  
+       x-mem-set "Target" x-mem-value "Home" 
+       x-mem-set "Distance to Target" (distance x-mem-value "Home")
+       x-mem-set "MyTicket" "NoTicket"
+       x-mem-set "CashtoWithdraw" 0
+    >#
+  ]
+  [report x-false]
+end
+
+;;; Ask the bank for the cash, in order to push it to the failure state, but does not update 
+;;; its cash level.
+to-report detecting-bank-failure
+  let cash#2#withdraw x-mem-value "CashtoWithdraw"
+  ifelse([not solvent_for? cash#2#withdraw] of (x-mem-value "MyBank"))
+  [
+    report x-true 
+    #< x-action [[] -> ask (x-mem-value "MyBank") [withdraw-money cash#2#withdraw]]
+    ># 
+    #< x-mem-set "Target" x-mem-value "Home" 
+       x-mem-set "Distance to Target" (distance x-mem-value "Home")
+       x-mem-set "MyTicket" "NoTicket"
+       x-mem-set "CashtoWithdraw" 0
+    >#
+  ]
+  [report x-false]
+end
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Agent Sensors
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report resting?
+  report patch-here = x-mem-value "Home"
+end
+;;; Tick = 15mins.
+to-report is-start-of-the-day?
+ifelse (ticks mod 96 = 0)
+  [report true]
+  [report false]
+end
+
+;; 0-32 working
+to-report work-day-ends?
+  ifelse (ticks mod 96 = 32)
+  [report true]
+  [report false]
+end
+
+to-report working-period?
+  report (ticks mod 96 <= 32)
+end
+
+to-report free-time?
+  report (ticks mod 96 > 32)
+end
+
+to-report day-time-indication
+  if (working-period?) [report "Working Period"]
+  if (free-time?) [report "FreeTime"]
+end
+
+to-report at-shop?
+  report any? shops-here with [shop-open]
+end
+
+;;; Checks if we are at the target shop.
+to-report at-target-shop? [t-shop]
+  report distance t-shop < 0.5
+end
+
+to-report any-open-shops?
+  report any? shops with [shop-open]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Agent Actions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+to move-randomly
+  set heading heading + (round random-normal 0 10)
+  walk
+end
+
+to walk
+  if ((any? other persons in-cone 1 180))
+    [set heading heading + random 90]
+  fd 0.3
+end
+
+to move-to-target [targ]
+  face targ
+  fd x-mem-value "Distance to Target" / 3
+end
+
+
+
